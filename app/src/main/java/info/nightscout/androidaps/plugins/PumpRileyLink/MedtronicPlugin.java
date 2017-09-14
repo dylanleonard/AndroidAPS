@@ -1,5 +1,10 @@
 package info.nightscout.androidaps.plugins.PumpRileyLink;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.IBinder;
 import android.support.annotation.Nullable;
 
 import org.json.JSONObject;
@@ -10,6 +15,7 @@ import java.util.Date;
 
 import info.nightscout.androidaps.Config;
 import info.nightscout.androidaps.Constants;
+import info.nightscout.androidaps.MainApp;
 import info.nightscout.androidaps.data.DetailedBolusInfo;
 import info.nightscout.androidaps.data.Profile;
 import info.nightscout.androidaps.data.ProfileStore;
@@ -20,12 +26,15 @@ import info.nightscout.androidaps.interfaces.ProfileInterface;
 import info.nightscout.androidaps.interfaces.PumpDescription;
 import info.nightscout.androidaps.interfaces.PumpInterface;
 import info.nightscout.androidaps.plugins.PumpRileyLink.services.MedtronicExecutionService;
+import info.nightscout.utils.SP;
 
 import static info.nightscout.androidaps.R.string.pump;
 
 /**
  * Created by Dylan on 9/14/2017.
  */
+
+//ToDo Finish adapting all features from DanaRPlugin
 
 public class MedtronicPlugin implements PluginBase, PumpInterface, ConstraintsInterface, ProfileInterface {
 
@@ -55,6 +64,55 @@ public class MedtronicPlugin implements PluginBase, PumpInterface, ConstraintsIn
     }
 
     public static PumpDescription pumpDescription = new PumpDescription();
+
+    private ServiceConnection mConnection = new ServiceConnection() {
+
+        public void onServiceDisconnected(ComponentName name) {
+            log.debug("Service is disconnected");
+            sExecutionService = null;
+        }
+
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            log.debug("Service is connected");
+            MedtronicExecutionService.LocalBinder mLocalBinder = (MedtronicExecutionService.LocalBinder) service;
+            sExecutionService = mLocalBinder.getServiceInstance();
+        }
+    };
+
+    public MedtronicPlugin() {
+
+        //ToDo Make sure all of this applies to Medtronic Pumps
+        useExtendedBoluses = SP.getBoolean("medtronic_useextended", false);
+
+        Context context = MainApp.instance().getApplicationContext();
+        Intent intent = new Intent(context, MedtronicExecutionService.class);
+        context.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+        MainApp.bus().register(this);
+
+        pumpDescription.isBolusCapable = true;
+        pumpDescription.bolusStep = 0.05d;
+
+        pumpDescription.isExtendedBolusCapable = true;
+        pumpDescription.extendedBolusStep = 0.05d;
+        pumpDescription.extendedBolusDurationStep = 30;
+        pumpDescription.extendedBolusMaxDuration = 8 * 60;
+
+        pumpDescription.isTempBasalCapable = true;
+        pumpDescription.tempBasalStyle = PumpDescription.PERCENT;
+
+        pumpDescription.maxTempPercent = 200;
+        pumpDescription.tempPercentStep = 10;
+
+        pumpDescription.tempDurationStep = 60;
+        pumpDescription.tempMaxDuration = 24 * 60;
+
+
+        pumpDescription.isSetBasalProfileCapable = true;
+        pumpDescription.basalStep = 0.01d;
+        pumpDescription.basalMinimumRate = 0.04d;
+
+        pumpDescription.isRefillingCapable = true;
+    }
 
     @Override
     public boolean isLoopEnabled() {

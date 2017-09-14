@@ -11,7 +11,7 @@ import android.support.annotation.Nullable;
  */
 
 public class MedtronicExecutionService extends Service {
-    private IBinder mBinder = new Localbinder();
+    private IBinder mBinder = new LocalBinder();
 
     @Nullable
     @Override
@@ -19,7 +19,7 @@ public class MedtronicExecutionService extends Service {
         return mBinder;
     }
 
-    private class Localbinder extends Binder {
+    public class LocalBinder extends Binder {
         public MedtronicExecutionService getServiceInstance() {
             return MedtronicExecutionService.this;
         }
