@@ -39,7 +39,7 @@ import info.nightscout.utils.DecimalFormatter;
 public class PersistentNotificationPlugin implements PluginBase {
 
     private static final int ONGOING_NOTIFICATION_ID = 4711;
-    static boolean fragmentEnabled = true;
+    private boolean fragmentEnabled = true;
     private final Context ctx;
 
     public PersistentNotificationPlugin(Context ctx) {
@@ -203,6 +203,11 @@ public class PersistentNotificationPlugin implements PluginBase {
     @Override
     public void setFragmentVisible(int type, boolean fragmentVisible) {
         //no visible fragment
+    }
+
+    @Override
+    public int getPreferencesId() {
+        return -1;
     }
 
     private String deltastring(double deltaMGDL, double deltaMMOL, String units) {

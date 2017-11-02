@@ -146,6 +146,11 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
         // Always visible
     }
 
+    @Override
+    public int getPreferencesId() {
+        return -1;
+    }
+
     public void initialize() {
         pluginList = MainApp.getPluginsList();
         loadSettings();
@@ -216,7 +221,7 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
         return activePump;
     }
 
-   public static SensitivityInterface getActiveSensitivity() {
+    public static SensitivityInterface getActiveSensitivity() {
         return activeSensitivity;
     }
 
@@ -301,7 +306,7 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
         pluginsInCategory = MainApp.getSpecificPluginsList(PluginBase.PUMP);
         activePump = (PumpInterface) getTheOneEnabledInArray(pluginsInCategory, PluginBase.PUMP);
         if (activePump == null)
-            activePump = VirtualPumpPlugin.getInstance(); // for NSClient build
+            activePump = VirtualPumpPlugin.getPlugin(); // for NSClient build
         if (Config.logConfigBuilder)
             log.debug("Selected pump interface: " + ((PluginBase) activePump).getName());
         for (PluginBase p : pluginsInCategory) {
@@ -574,7 +579,7 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
                 if (Config.logCongigBuilderActions)
                     log.debug("applyAPSRequest: Basal set correctly");
             }
-        } else if (isTempBasalInProgress() && Math.abs(request.rate - getTempBasalAbsoluteRateHistory()) < 0.05) {
+        } else if (isTempBasalInProgress() && Math.abs(request.rate - getTempBasalAbsoluteRateHistory()) < getPumpDescription().basalStep) {
             result = new PumpEnactResult();
             result.absolute = getTempBasalAbsoluteRateHistory();
             result.duration = getTempBasalFromHistory(System.currentTimeMillis()).getPlannedRemainingMinutes();
@@ -892,6 +897,12 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
 
     @Override
     @Nullable
+    public TempTarget getTempTargetFromHistory() {
+        return activeTreatments.getTempTargetFromHistory(System.currentTimeMillis());
+    }
+
+    @Override
+    @Nullable
     public TempTarget getTempTargetFromHistory(long time) {
         return activeTreatments.getTempTargetFromHistory(time);
     }
@@ -928,10 +939,14 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
     }
 
     public String getProfileName(long time) {
+        return getProfileName(time, true);
+    }
+
+    public String getProfileName(long time, boolean customized) {
         ProfileSwitch profileSwitch = getProfileSwitchFromHistory(time);
         if (profileSwitch != null) {
             if (profileSwitch.profileJson != null) {
-                return profileSwitch.profileName;
+                return customized ? profileSwitch.getCustomizedName() : profileSwitch.profileName;
             } else {
                 Profile profile = activeProfile.getProfile().getSpecificProfile(profileSwitch.profileName);
                 if (profile != null)
@@ -951,7 +966,7 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
     }
 
     public String getProfileUnits() {
-        return activeProfile.getUnits();
+        return getProfile().getUnits();
     }
 
     public Profile getProfile(long time) {
@@ -987,7 +1002,7 @@ public class ConfigBuilderPlugin implements PluginBase, PumpInterface, Constrain
             MainApp.bus().post(new EventNewNotification(nobasal));
             Notification notarget = new Notification(Notification.TARGET_MISSING, MainApp.sResources.getString(R.string.targetmissing), Notification.URGENT);
             MainApp.bus().post(new EventNewNotification(notarget));
-            return new Profile(new JSONObject("{\"dia\":\"3\",\"carbratio\":[{\"time\":\"00:00\",\"value\":\"20\"}],\"carbs_hr\":\"20\",\"delay\":\"20\",\"sens\":[{\"time\":\"00:00\",\"value\":\"20\"}],\"timezone\":\"UTC\",\"basal\":[{\"time\":\"00:00\",\"value\":\"0.1\"}],\"target_low\":[{\"time\":\"00:00\",\"value\":\"6\"}],\"target_high\":[{\"time\":\"00:00\",\"value\":\"8\"}],\"startDate\":\"1970-01-01T00:00:00.000Z\",\"units\":\"mmol\"}}"));
+            return new Profile(new JSONObject("{\"dia\":\"3\",\"carbratio\":[{\"time\":\"00:00\",\"value\":\"20\"}],\"carbs_hr\":\"20\",\"delay\":\"20\",\"sens\":[{\"time\":\"00:00\",\"value\":\"20\"}],\"timezone\":\"UTC\",\"basal\":[{\"time\":\"00:00\",\"value\":\"0.1\"}],\"target_low\":[{\"time\":\"00:00\",\"value\":\"6\"}],\"target_high\":[{\"time\":\"00:00\",\"value\":\"8\"}],\"startDate\":\"1970-01-01T00:00:00.000Z\",\"units\":\"mmol\"}}"), 100, 0);
         } catch (JSONException e) {
             log.error("Unhandled exception", e);
         }
