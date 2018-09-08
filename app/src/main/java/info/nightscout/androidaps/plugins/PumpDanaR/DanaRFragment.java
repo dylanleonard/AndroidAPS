@@ -1,13 +1,12 @@
 package info.nightscout.androidaps.plugins.PumpDanaR;
 
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.support.v4.app.FragmentManager;
+import android.text.Spanned;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -15,152 +14,141 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.crashlytics.android.Crashlytics;
 import com.squareup.otto.Subscribe;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import butterknife.OnClick;
 import info.nightscout.androidaps.MainApp;
 import info.nightscout.androidaps.R;
+import info.nightscout.androidaps.activities.TDDStatsActivity;
+import info.nightscout.androidaps.db.ExtendedBolus;
+import info.nightscout.androidaps.db.TemporaryBasal;
 import info.nightscout.androidaps.events.EventExtendedBolusChange;
 import info.nightscout.androidaps.events.EventPumpStatusChanged;
 import info.nightscout.androidaps.events.EventTempBasalChange;
+import info.nightscout.androidaps.interfaces.PluginType;
+import info.nightscout.androidaps.logging.L;
 import info.nightscout.androidaps.plugins.Common.SubscriberFragment;
+import info.nightscout.androidaps.plugins.ConfigBuilder.ConfigBuilderPlugin;
 import info.nightscout.androidaps.plugins.PumpDanaR.Dialogs.ProfileViewDialog;
 import info.nightscout.androidaps.plugins.PumpDanaR.activities.DanaRHistoryActivity;
-import info.nightscout.androidaps.plugins.PumpDanaR.activities.DanaRStatsActivity;
+import info.nightscout.androidaps.plugins.PumpDanaR.activities.DanaRUserOptionsActivity;
 import info.nightscout.androidaps.plugins.PumpDanaR.events.EventDanaRNewStatus;
+import info.nightscout.androidaps.plugins.PumpDanaRKorean.DanaRKoreanPlugin;
+import info.nightscout.androidaps.plugins.Treatments.TreatmentsPlugin;
+import info.nightscout.androidaps.queue.events.EventQueueChanged;
 import info.nightscout.utils.DateUtil;
 import info.nightscout.utils.DecimalFormatter;
 import info.nightscout.utils.SetWarnColor;
 
 public class DanaRFragment extends SubscriberFragment {
-    private static Logger log = LoggerFactory.getLogger(DanaRFragment.class);
-
-    private static Handler sHandler;
-    private static HandlerThread sHandlerThread;
+    private static Logger log = LoggerFactory.getLogger(L.PUMP);
 
     private Handler loopHandler = new Handler();
-    private Runnable refreshLoop = null;
-
-    TextView lastConnectionView;
-    TextView btConnectionView;
-    TextView lastBolusView;
-    TextView dailyUnitsView;
-    TextView basaBasalRateView;
-    TextView tempBasalView;
-    TextView extendedBolusView;
-    TextView batteryView;
-    TextView reservoirView;
-    TextView iobView;
-    TextView firmwareView;
-    TextView basalStepView;
-    TextView bolusStepView;
-    TextView serialNumberView;
-    Button viewProfileButton;
-    Button historyButton;
-    Button statsButton;
-
-    LinearLayout pumpStatusLayout;
-    TextView pumpStatusView;
-
-    static Runnable connectRunnable = new Runnable() {
+    private Runnable refreshLoop = new Runnable() {
         @Override
         public void run() {
-            MainApp.getConfigBuilder().refreshDataFromPump("Connect request from GUI");
+            updateGUI();
+            loopHandler.postDelayed(refreshLoop, 60 * 1000L);
         }
     };
 
+    @BindView(R.id.danar_lastconnection)
+    TextView lastConnectionView;
+    @BindView(R.id.danar_btconnection)
+    TextView btConnectionView;
+    @BindView(R.id.danar_lastbolus)
+    TextView lastBolusView;
+    @BindView(R.id.danar_dailyunits)
+    TextView dailyUnitsView;
+    @BindView(R.id.danar_basabasalrate)
+    TextView basaBasalRateView;
+    @BindView(R.id.danar_tempbasal)
+    TextView tempBasalView;
+    @BindView(R.id.danar_extendedbolus)
+    TextView extendedBolusView;
+    @BindView(R.id.danar_battery)
+    TextView batteryView;
+    @BindView(R.id.danar_reservoir)
+    TextView reservoirView;
+    @BindView(R.id.danar_iob)
+    TextView iobView;
+    @BindView(R.id.danar_firmware)
+    TextView firmwareView;
+    @BindView(R.id.danar_basalstep)
+    TextView basalStepView;
+    @BindView(R.id.danar_bolusstep)
+    TextView bolusStepView;
+    @BindView(R.id.danar_serialnumber)
+    TextView serialNumberView;
+    @BindView(R.id.danar_queue)
+    TextView queueView;
+
+    @BindView(R.id.overview_pumpstatuslayout)
+    LinearLayout pumpStatusLayout;
+    @BindView(R.id.overview_pumpstatus)
+    TextView pumpStatusView;
+    @BindView(R.id.danar_user_options)
+    Button danar_user_options;
 
     public DanaRFragment() {
-        if (sHandlerThread == null) {
-            sHandlerThread = new HandlerThread(DanaRFragment.class.getSimpleName());
-            sHandlerThread.start();
-            sHandler = new Handler(sHandlerThread.getLooper());
-        }
     }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (refreshLoop == null) {
-            refreshLoop = new Runnable() {
-                @Override
-                public void run() {
-                    updateGUI();
-                    loopHandler.postDelayed(refreshLoop, 60 * 1000L);
-                }
-            };
-            loopHandler.postDelayed(refreshLoop, 60 * 1000L);
-        }
+        loopHandler.postDelayed(refreshLoop, 60 * 1000L);
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        loopHandler.removeCallbacks(refreshLoop);
     }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
-        try {
-            View view = inflater.inflate(R.layout.danar_fragment, container, false);
-            btConnectionView = (TextView) view.findViewById(R.id.danar_btconnection);
-            lastConnectionView = (TextView) view.findViewById(R.id.danar_lastconnection);
-            lastBolusView = (TextView) view.findViewById(R.id.danar_lastbolus);
-            dailyUnitsView = (TextView) view.findViewById(R.id.danar_dailyunits);
-            basaBasalRateView = (TextView) view.findViewById(R.id.danar_basabasalrate);
-            tempBasalView = (TextView) view.findViewById(R.id.danar_tempbasal);
-            extendedBolusView = (TextView) view.findViewById(R.id.danar_extendedbolus);
-            batteryView = (TextView) view.findViewById(R.id.danar_battery);
-            reservoirView = (TextView) view.findViewById(R.id.danar_reservoir);
-            iobView = (TextView) view.findViewById(R.id.danar_iob);
-            firmwareView = (TextView) view.findViewById(R.id.danar_firmware);
-            viewProfileButton = (Button) view.findViewById(R.id.danar_viewprofile);
-            historyButton = (Button) view.findViewById(R.id.danar_history);
-            statsButton = (Button) view.findViewById(R.id.danar_stats);
-            basalStepView = (TextView) view.findViewById(R.id.danar_basalstep);
-            bolusStepView = (TextView) view.findViewById(R.id.danar_bolusstep);
-            serialNumberView = (TextView) view.findViewById(R.id.danar_serialnumber);
+        View view = inflater.inflate(R.layout.danar_fragment, container, false);
+        unbinder = ButterKnife.bind(this, view);
 
-            pumpStatusView = (TextView) view.findViewById(R.id.overview_pumpstatus);
-            pumpStatusView.setBackgroundColor(MainApp.sResources.getColor(R.color.colorInitializingBorder));
-            pumpStatusLayout = (LinearLayout) view.findViewById(R.id.overview_pumpstatuslayout);
+        pumpStatusView.setBackgroundColor(MainApp.gc(R.color.colorInitializingBorder));
 
-            viewProfileButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    FragmentManager manager = getFragmentManager();
-                    ProfileViewDialog profileViewDialog = new ProfileViewDialog();
-                    profileViewDialog.show(manager, "ProfileViewDialog");
-                }
-            });
+        return view;
+    }
 
-            historyButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    startActivity(new Intent(getContext(), DanaRHistoryActivity.class));
-                }
-            });
+    @OnClick(R.id.danar_history)
+    void onHistoryClick() {
+        startActivity(new Intent(getContext(), DanaRHistoryActivity.class));
+    }
 
-            statsButton.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    startActivity(new Intent(getContext(), DanaRStatsActivity.class));
-                }
-            });
+    @OnClick(R.id.danar_viewprofile)
+    void onViewProfileClick() {
+        FragmentManager manager = getFragmentManager();
+        ProfileViewDialog profileViewDialog = new ProfileViewDialog();
+        profileViewDialog.show(manager, "ProfileViewDialog");
+    }
 
-            btConnectionView.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    log.debug("Clicked connect to pump");
-                    sHandler.post(connectRunnable);
-                }
-            });
+    @OnClick(R.id.danar_stats)
+    void onStatsClick() {
+        startActivity(new Intent(getContext(), TDDStatsActivity.class));
+    }
 
-            updateGUI();
-            return view;
-        } catch (Exception e) {
-            Crashlytics.logException(e);
-        }
+    @OnClick(R.id.danar_user_options)
+    void onUserOptionsClick() {
+        startActivity(new Intent(getContext(), DanaRUserOptionsActivity.class));
+    }
 
-        return null;
+    @OnClick(R.id.danar_btconnection)
+    void onBtConnectionClick() {
+        if (L.isEnabled(L.PUMP))
+            log.debug("Clicked connect to pump");
+        DanaRPump.getInstance().lastConnection = 0;
+        ConfigBuilderPlugin.getCommandQueue().readStatus("Clicked connect to pump", null);
     }
 
     @Subscribe
@@ -169,9 +157,12 @@ public class DanaRFragment extends SubscriberFragment {
         final String status = c.textStatus();
         if (activity != null) {
             activity.runOnUiThread(
-                    new Runnable() {
-                        @Override
-                        public void run() {
+                    () -> {
+                        synchronized (DanaRFragment.this) {
+
+                            if (btConnectionView == null || pumpStatusView == null || pumpStatusLayout == null)
+                                return;
+
                             if (c.sStatus == EventPumpStatusChanged.CONNECTING)
                                 btConnectionView.setText("{fa-bluetooth-b spin} " + c.sSecondsElapsed + "s");
                             else if (c.sStatus == EventPumpStatusChanged.CONNECTED)
@@ -206,50 +197,57 @@ public class DanaRFragment extends SubscriberFragment {
         updateGUI();
     }
 
+    @Subscribe
+    public void onStatusEvent(final EventQueueChanged s) {
+        updateGUI();
+    }
+
     // GUI functions
     @Override
     protected void updateGUI() {
         Activity activity = getActivity();
         if (activity != null && basaBasalRateView != null)
-            activity.runOnUiThread(new Runnable() {
-                @SuppressLint("SetTextI18n")
-                @Override
-                public void run() {
+            activity.runOnUiThread(() -> {
+                synchronized (DanaRFragment.this) {
+                    if (!isBound()) return;
+
                     DanaRPump pump = DanaRPump.getInstance();
-                    if (pump.lastConnection.getTime() != 0) {
-                        Long agoMsec = System.currentTimeMillis() - pump.lastConnection.getTime();
+                    if (pump.lastConnection != 0) {
+                        Long agoMsec = System.currentTimeMillis() - pump.lastConnection;
                         int agoMin = (int) (agoMsec / 60d / 1000d);
-                        lastConnectionView.setText(DateUtil.timeString(pump.lastConnection) + " (" + String.format(MainApp.sResources.getString(R.string.minago), agoMin) + ")");
+                        lastConnectionView.setText(DateUtil.timeString(pump.lastConnection) + " (" + String.format(MainApp.gs(R.string.minago), agoMin) + ")");
                         SetWarnColor.setColor(lastConnectionView, agoMin, 16d, 31d);
                     }
-                    if (pump.lastBolusTime.getTime() != 0) {
-                        Long agoMsec = System.currentTimeMillis() - pump.lastBolusTime.getTime();
+                    if (pump.lastBolusTime != 0) {
+                        Long agoMsec = System.currentTimeMillis() - pump.lastBolusTime;
                         double agoHours = agoMsec / 60d / 60d / 1000d;
                         if (agoHours < 6) // max 6h back
-                            lastBolusView.setText(DateUtil.timeString(pump.lastBolusTime) + " (" + DecimalFormatter.to1Decimal(agoHours) + " " + MainApp.sResources.getString(R.string.hoursago) + ") " + DecimalFormatter.to2Decimal(DanaRPump.getInstance().lastBolusAmount) + " U");
+                            lastBolusView.setText(DateUtil.timeString(pump.lastBolusTime) + " " + DateUtil.sinceString(pump.lastBolusTime) + " " + DecimalFormatter.to2Decimal(DanaRPump.getInstance().lastBolusAmount) + " U");
                         else lastBolusView.setText("");
                     }
 
                     dailyUnitsView.setText(DecimalFormatter.to0Decimal(pump.dailyTotalUnits) + " / " + pump.maxDailyTotalUnits + " U");
                     SetWarnColor.setColor(dailyUnitsView, pump.dailyTotalUnits, pump.maxDailyTotalUnits * 0.75d, pump.maxDailyTotalUnits * 0.9d);
-                    basaBasalRateView.setText("( " + (pump.activeProfile + 1) + " )  " + DecimalFormatter.to2Decimal(MainApp.getConfigBuilder().getBaseBasalRate()) + " U/h");
+                    basaBasalRateView.setText("( " + (pump.activeProfile + 1) + " )  " + DecimalFormatter.to2Decimal(ConfigBuilderPlugin.getActivePump().getBaseBasalRate()) + " U/h");
                     // DanaRPlugin, DanaRKoreanPlugin
-                    if (MainApp.getConfigBuilder().isFakingTempsByExtendedBoluses()) {
-                        if (MainApp.getConfigBuilder().isInHistoryRealTempBasalInProgress()) {
-                            tempBasalView.setText(MainApp.getConfigBuilder().getRealTempBasalFromHistory(System.currentTimeMillis()).toStringFull());
+                    if (ConfigBuilderPlugin.getActivePump().isFakingTempsByExtendedBoluses()) {
+                        if (TreatmentsPlugin.getPlugin().isInHistoryRealTempBasalInProgress()) {
+                            tempBasalView.setText(TreatmentsPlugin.getPlugin().getRealTempBasalFromHistory(System.currentTimeMillis()).toStringFull());
                         } else {
                             tempBasalView.setText("");
                         }
                     } else {
                         // v2 plugin
-                        if (MainApp.getConfigBuilder().isTempBasalInProgress()) {
-                            tempBasalView.setText(MainApp.getConfigBuilder().getTempBasalFromHistory(System.currentTimeMillis()).toStringFull());
+                        TemporaryBasal tb = TreatmentsPlugin.getPlugin().getTempBasalFromHistory(System.currentTimeMillis());
+                        if (tb != null) {
+                            tempBasalView.setText(tb.toStringFull());
                         } else {
                             tempBasalView.setText("");
                         }
                     }
-                    if (MainApp.getConfigBuilder().isInHistoryExtendedBoluslInProgress()) {
-                        extendedBolusView.setText(MainApp.getConfigBuilder().getExtendedBolusFromHistory(System.currentTimeMillis()).toString());
+                    ExtendedBolus activeExtendedBolus = TreatmentsPlugin.getPlugin().getExtendedBolusFromHistory(System.currentTimeMillis());
+                    if (activeExtendedBolus != null) {
+                        extendedBolusView.setText(activeExtendedBolus.toString());
                     } else {
                         extendedBolusView.setText("");
                     }
@@ -258,18 +256,49 @@ public class DanaRFragment extends SubscriberFragment {
                     batteryView.setText("{fa-battery-" + (pump.batteryRemaining / 25) + "}");
                     SetWarnColor.setColorInverse(batteryView, pump.batteryRemaining, 51d, 26d);
                     iobView.setText(pump.iob + " U");
-                    if (pump.isNewPump) {
-                        firmwareView.setText(String.format(MainApp.sResources.getString(R.string.danar_model), pump.model, pump.protocol, pump.productCode));
+                    if (pump.model != 0 || pump.protocol != 0 || pump.productCode != 0) {
+                        firmwareView.setText(String.format(MainApp.gs(R.string.danar_model), pump.model, pump.protocol, pump.productCode));
                     } else {
                         firmwareView.setText("OLD");
                     }
                     basalStepView.setText("" + pump.basalStep);
                     bolusStepView.setText("" + pump.bolusStep);
                     serialNumberView.setText("" + pump.serialNumber);
-
+                    if (queueView != null) {
+                        Spanned status = ConfigBuilderPlugin.getCommandQueue().spannedStatus();
+                        if (status.toString().equals("")) {
+                            queueView.setVisibility(View.GONE);
+                        } else {
+                            queueView.setVisibility(View.VISIBLE);
+                            queueView.setText(status);
+                        }
+                    }
+                    //hide user options button if not an RS pump or old firmware
+                    // also excludes pump with model 03 because of untested error
+                    boolean isKorean = DanaRKoreanPlugin.getPlugin().isEnabled(PluginType.PUMP);
+                    if (isKorean || firmwareView.getText() == "OLD" || pump.model == 3) {
+                        danar_user_options.setVisibility(View.GONE);
+                    }
                 }
             });
+    }
 
+    private boolean isBound() {
+        return lastConnectionView != null
+                && lastBolusView != null
+                && dailyUnitsView != null
+                && basaBasalRateView != null
+                && tempBasalView != null
+                && extendedBolusView != null
+                && reservoirView != null
+                && batteryView != null
+                && iobView != null
+                && firmwareView != null
+                && basalStepView != null
+                && bolusStepView != null
+                && serialNumberView != null
+                && danar_user_options != null
+                && queueView != null;
     }
 
 }

@@ -9,36 +9,30 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
-import info.nightscout.androidaps.Config;
+import info.nightscout.androidaps.logging.L;
 import info.nightscout.androidaps.plugins.PumpDanaR.comm.MessageBase;
 import info.nightscout.androidaps.plugins.PumpDanaR.comm.MessageHashTable;
+import info.nightscout.androidaps.plugins.PumpDanaR.services.AbstractSerialIOThread;
 import info.nightscout.utils.CRC;
 
 /**
  * Created by mike on 17.07.2016.
  */
-public class SerialIOThread extends Thread {
-    private static Logger log = LoggerFactory.getLogger(SerialIOThread.class);
+public class SerialIOThread extends AbstractSerialIOThread {
+    private static Logger log = LoggerFactory.getLogger(L.PUMPBTCOMM);
 
     private InputStream mInputStream = null;
     private OutputStream mOutputStream = null;
     private BluetoothSocket mRfCommSocket;
 
-    private static final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
-    private static ScheduledFuture<?> scheduledDisconnection = null;
-
     private boolean mKeepRunning = true;
     private byte[] mReadBuff = new byte[0];
 
-    MessageBase processedMessage;
+    private MessageBase processedMessage;
 
     public SerialIOThread(BluetoothSocket rfcommSocket) {
-        super(SerialIOThread.class.toString());
+        super();
 
         mRfCommSocket = rfcommSocket;
         try {
@@ -64,7 +58,8 @@ public class SerialIOThread extends Thread {
                 // process all messages we already got
                 while (mReadBuff.length > 3) { // 3rd byte is packet size. continue only if we an determine packet size
                     byte[] extractedBuff = cutMessageFromBuffer();
-                    if (extractedBuff == null) break; // message is not complete in buffer (wrong packet calls disconnection)
+                    if (extractedBuff == null)
+                        break; // message is not complete in buffer (wrong packet calls disconnection)
 
                     int command = (extractedBuff[5] & 0xFF) | ((extractedBuff[4] << 8) & 0xFF00);
 
@@ -76,7 +71,7 @@ public class SerialIOThread extends Thread {
                         message = MessageHashTable.findMessage(command);
                     }
 
-                    if (Config.logDanaMessageDetail)
+                    if (L.isEnabled(L.PUMPBTCOMM))
                         log.debug("<<<<< " + message.getMessageName() + " " + message.toHexString(extractedBuff));
 
                     // process the message content
@@ -85,11 +80,10 @@ public class SerialIOThread extends Thread {
                     synchronized (message) {
                         message.notify();
                     }
-                    scheduleDisconnection();
                 }
             }
         } catch (Exception e) {
-            if (Config.logDanaSerialEngine && e.getMessage().indexOf("bt socket closed") < 0)
+            if (e.getMessage().indexOf("bt socket closed") < 0)
                 log.error("Thread exception: ", e);
             mKeepRunning = false;
         }
@@ -144,6 +138,7 @@ public class SerialIOThread extends Thread {
         }
     }
 
+    @Override
     public synchronized void sendMessage(MessageBase message) {
         if (!mRfCommSocket.isConnected()) {
             log.error("Socket not connected on sendMessage");
@@ -152,7 +147,7 @@ public class SerialIOThread extends Thread {
         processedMessage = message;
 
         byte[] messageBytes = message.getRawMessageBytes();
-        if (Config.logDanaSerialEngine)
+        if (L.isEnabled(L.PUMPBTCOMM))
             log.debug(">>>>> " + message.getMessageName() + " " + message.toHexString(messageBytes));
 
         try {
@@ -174,51 +169,41 @@ public class SerialIOThread extends Thread {
             log.warn("Reply not received " + message.getMessageName());
             if (message.getCommand() == 0xF0F1) {
                 DanaRPump.getInstance().isNewPump = false;
-                log.debug("Old firmware detected");
+                if (L.isEnabled(L.PUMPCOMM))
+                    log.debug("Old firmware detected");
             }
         }
-        scheduleDisconnection();
     }
 
-    public void scheduleDisconnection() {
-        class DisconnectRunnable implements Runnable {
-            public void run() {
-                disconnect("scheduleDisconnection");
-                scheduledDisconnection = null;
-            }
-        }
-        // prepare task for execution in 10 sec
-        // cancel waiting task to prevent sending multiple disconnections
-        if (scheduledDisconnection != null)
-            scheduledDisconnection.cancel(false);
-        Runnable task = new DisconnectRunnable();
-        final int sec = 10;
-        scheduledDisconnection = worker.schedule(task, sec, TimeUnit.SECONDS);
-    }
-
+    @Override
     public void disconnect(String reason) {
         mKeepRunning = false;
         try {
             mInputStream.close();
         } catch (Exception e) {
-            if (Config.logDanaSerialEngine) log.debug(e.getMessage());
+            if (L.isEnabled(L.PUMPBTCOMM))
+                log.debug(e.getMessage());
         }
         try {
             mOutputStream.close();
         } catch (Exception e) {
-            if (Config.logDanaSerialEngine) log.debug(e.getMessage());
+            if (L.isEnabled(L.PUMPBTCOMM))
+                log.debug(e.getMessage());
         }
         try {
             mRfCommSocket.close();
         } catch (Exception e) {
-            if (Config.logDanaSerialEngine) log.debug(e.getMessage());
+            if (L.isEnabled(L.PUMPBTCOMM))
+                log.debug(e.getMessage());
         }
         try {
             System.runFinalization();
         } catch (Exception e) {
-            if (Config.logDanaSerialEngine) log.debug(e.getMessage());
+            if (L.isEnabled(L.PUMPBTCOMM))
+                log.debug(e.getMessage());
         }
-        if (Config.logDanaSerialEngine) log.debug("Disconnected: " + reason);
+        if (L.isEnabled(L.PUMPBTCOMM))
+            log.debug("Disconnected: " + reason);
     }
 
 }

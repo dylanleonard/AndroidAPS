@@ -1,30 +1,47 @@
 package info.nightscout.androidaps.receivers;
 
-/**
- * Created by mike on 07.07.2016.
- */
-
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.PowerManager;
-import android.preference.PreferenceManager;
+
+import com.crashlytics.android.answers.CustomEvent;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Date;
-
 import info.nightscout.androidaps.Constants;
 import info.nightscout.androidaps.MainApp;
-import info.nightscout.androidaps.interfaces.PumpInterface;
 import info.nightscout.androidaps.data.Profile;
+import info.nightscout.androidaps.events.EventProfileSwitchChange;
+import info.nightscout.androidaps.interfaces.PumpInterface;
+import info.nightscout.androidaps.logging.L;
+import info.nightscout.androidaps.plugins.ConfigBuilder.ConfigBuilderPlugin;
+import info.nightscout.androidaps.plugins.ConfigBuilder.ProfileFunctions;
+import info.nightscout.androidaps.queue.commands.Command;
+import info.nightscout.utils.DateUtil;
+import info.nightscout.utils.FabricPrivacy;
+import info.nightscout.utils.LocalAlertUtils;
+import info.nightscout.utils.T;
 
+
+/**
+ * Created by mike on 07.07.2016.
+ */
 public class KeepAliveReceiver extends BroadcastReceiver {
-    private static Logger log = LoggerFactory.getLogger(KeepAliveReceiver.class);
+    private static Logger log = LoggerFactory.getLogger(L.CORE);
+    public static final long STATUS_UPDATE_FREQUENCY = T.mins(15).msecs();
+    private static long lastReadStatus = 0;
+    private static long lastRun = 0;
+
+    public static void cancelAlarm(Context context) {
+        Intent intent = new Intent(context, KeepAliveReceiver.class);
+        PendingIntent sender = PendingIntent.getBroadcast(context, 0, intent, 0);
+        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        alarmManager.cancel(sender);
+    }
 
     @Override
     public void onReceive(Context context, Intent rIntent) {
@@ -32,52 +49,55 @@ public class KeepAliveReceiver extends BroadcastReceiver {
         PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "");
         wl.acquire();
 
+        LocalAlertUtils.shortenSnoozeInterval();
+        LocalAlertUtils.checkStaleBGAlert();
+        checkPump();
+        FabricPrivacy.uploadDailyStats();
 
-        final PumpInterface pump = MainApp.getConfigBuilder();
-        final Profile profile = MainApp.getConfigBuilder().getProfile();
-        if (pump != null && profile != null && profile.getBasal() != null) {
-            boolean isBasalOutdated = false;
-            boolean isStatusOutdated = false;
-
-            Date lastConnection = pump.lastDataTime();
-            if (lastConnection.getTime() + 30 * 60 * 1000L < System.currentTimeMillis())
-                isStatusOutdated = true;
-            if (Math.abs(profile.getBasal() - pump.getBaseBasalRate()) > pump.getPumpDescription().basalStep)
-                isBasalOutdated = true;
-
-            SharedPreferences SP = PreferenceManager.getDefaultSharedPreferences(MainApp.instance().getApplicationContext());
-            if (SP.getBoolean("syncprofiletopump", false) && !pump.isThisProfileSet(profile)) {
-                Thread t = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        pump.setNewBasalProfile(profile);
-                    }
-                });
-                t.start();
-            } else if (isStatusOutdated && !pump.isBusy()) {
-                Thread t = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        pump.refreshDataFromPump("KeepAlive. Status outdated.");
-                    }
-                });
-                t.start();
-            } else if (isBasalOutdated && !pump.isBusy()) {
-                Thread t = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        pump.refreshDataFromPump("KeepAlive. Basal outdated.");
-                    }
-                });
-                t.start();
-            }
-        }
-
-        log.debug("KeepAlive received");
+        if (L.isEnabled(L.CORE))
+            log.debug("KeepAlive received");
         wl.release();
     }
 
+    private void checkPump() {
+        final PumpInterface pump = ConfigBuilderPlugin.getActivePump();
+        final Profile profile = ProfileFunctions.getInstance().getProfile();
+        if (pump != null && profile != null) {
+            long lastConnection = pump.lastDataTime();
+            boolean isStatusOutdated = lastConnection + STATUS_UPDATE_FREQUENCY < System.currentTimeMillis();
+            boolean isBasalOutdated = Math.abs(profile.getBasal() - pump.getBaseBasalRate()) > pump.getPumpDescription().basalStep;
+
+            if (L.isEnabled(L.CORE))
+                log.debug("Last connection: " + DateUtil.dateAndTimeString(lastConnection));
+            // sometimes keepalive broadcast stops
+            // as as workaround test if readStatus was requested before an alarm is generated
+            if (lastReadStatus != 0 && lastReadStatus > System.currentTimeMillis() - T.mins(5).msecs()) {
+                LocalAlertUtils.checkPumpUnreachableAlarm(lastConnection, isStatusOutdated);
+            }
+
+            if (!pump.isThisProfileSet(profile) && !ConfigBuilderPlugin.getCommandQueue().isRunning(Command.CommandType.BASALPROFILE)) {
+                MainApp.bus().post(new EventProfileSwitchChange());
+            } else if (isStatusOutdated && !pump.isBusy()) {
+                lastReadStatus = System.currentTimeMillis();
+                ConfigBuilderPlugin.getCommandQueue().readStatus("KeepAlive. Status outdated.", null);
+            } else if (isBasalOutdated && !pump.isBusy()) {
+                lastReadStatus = System.currentTimeMillis();
+                ConfigBuilderPlugin.getCommandQueue().readStatus("KeepAlive. Basal outdated.", null);
+            }
+        }
+        if (lastRun != 0 && System.currentTimeMillis() - lastRun > T.mins(10).msecs()) {
+            log.error("KeepAlive fail");
+            FabricPrivacy.getInstance().logCustom(new CustomEvent("KeepAliveFail"));
+        }
+        lastRun = System.currentTimeMillis();
+    }
+
+    //called by MainApp at first app start
     public void setAlarm(Context context) {
+
+        LocalAlertUtils.shortenSnoozeInterval();
+        LocalAlertUtils.presnoozeAlarms();
+
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         Intent i = new Intent(context, KeepAliveReceiver.class);
         PendingIntent pi = PendingIntent.getBroadcast(context, 0, i, 0);
@@ -89,10 +109,4 @@ public class KeepAliveReceiver extends BroadcastReceiver {
         am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis(), Constants.keepAliveMsecs, pi);
     }
 
-    public void cancelAlarm(Context context) {
-        Intent intent = new Intent(context, KeepAliveReceiver.class);
-        PendingIntent sender = PendingIntent.getBroadcast(context, 0, intent, 0);
-        AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-        alarmManager.cancel(sender);
-    }
 }
